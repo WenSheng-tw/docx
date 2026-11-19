@@ -1681,21 +1681,40 @@ ENDDO
 RETURN 0
 
 // PDF Wordom: OLE kad program linkuje hbwin (win_oleCreateObject), inace
-// preko PowerShella; .F. i razlog u cErr ako Word nije instaliran ili nije uspeo
+// preko PowerShella; .F. i razlog u cErr ako Word nije instaliran ili nije uspeo.
+// Zatvara se samo Word koji je ova funkcija pokrenula (prepoznat po PID-u):
+// Word koji je korisnik vec otvorio se ne sakriva i ne zatvara. Ako nas Word
+// posle Quit() i dalje radi (dijalog, "Word je zauzet"), gasi se samo on.
 STATIC FUNCTION _PdfWord( cDocx, cPdf, cErr )
 #if defined( __PLATFORM__WINDOWS )
-LOCAL oWord, oDoc, lOk := .F., i, oErr
+LOCAL oWord, oDoc, lOk := .F., i, oErr, aBefore, aAfter, nPid := 0, lOwn
 IF ! hb_IsFunction( "WIN_OLECREATEOBJECT" )
    RETURN _PdfWordPS( cDocx, cPdf, @cErr )
 ENDIF
+aBefore := _WordPids()                                  // Word koji vec radi (korisnikov)
 BEGIN SEQUENCE WITH {| e | Break( e ) }
    oWord := Do( "WIN_OLECREATEOBJECT", "Word.Application" )
    IF Empty( oWord )
       cErr += "Word nije instaliran. "
       BREAK
    ENDIF
-   oWord:Visible := .F.
+   aAfter := _WordPids()
+   IF aBefore != NIL .AND. aAfter != NIL
+      FOR EACH i IN aAfter
+         IF AScan( aBefore, i ) == 0
+            nPid := i
+            EXIT
+         ENDIF
+      NEXT
+   ENDIF
+   lOwn := nPid > 0 .OR. aBefore == NIL .OR. Empty( aBefore )
+   IF lOwn
+      oWord:Visible := .F.
+   ENDIF
    oWord:DisplayAlerts := 0
+   BEGIN SEQUENCE WITH {| e | Break( e ) }
+      oWord:AutomationSecurity := 3                     // msoAutomationSecurityForceDisable: bez makroa dokumenta
+   END SEQUENCE
    oDoc := oWord:Documents:Open( cDocx, .F., .T., .F. )     // ConfirmConversions, ReadOnly, AddToRecentFiles
    FOR i := 1 TO oDoc:TablesOfContents:Count
       oDoc:TablesOfContents:Item( i ):Update()
@@ -1708,14 +1727,25 @@ RECOVER USING oErr
       cErr += "Word: " + hb_CStr( oErr:description ) + " " + hb_CStr( oErr:operation ) + ". "
    ENDIF
 END SEQUENCE
-BEGIN SEQUENCE WITH {| e | Break( e ) }
-   IF ! Empty( oDoc )
-      oDoc:Close( .F. )
-   ENDIF
-   IF ! Empty( oWord )
-      oWord:Quit( .F. )
-   ENDIF
-END SEQUENCE
+/* svaki korak za sebe: Close() koji ne uspe ne sme da preskoci Quit() */
+IF ! Empty( oDoc )
+   BEGIN SEQUENCE WITH {| e | Break( e ) }
+      oDoc:Close( 0 )                                   // wdDoNotSaveChanges
+   END SEQUENCE
+ENDIF
+IF ! Empty( oWord ) .AND. hb_defaultValue( lOwn, .T. )
+   BEGIN SEQUENCE WITH {| e | Break( e ) }
+      oWord:NormalTemplate:Saved := .T.                 // bez pitanja "Sacuvati Normal.dotm?"
+   END SEQUENCE
+   BEGIN SEQUENCE WITH {| e | Break( e ) }
+      oWord:Quit( 0 )
+   END SEQUENCE
+ENDIF
+oDoc := NIL
+oWord := NIL
+IF nPid > 0
+   _WordEnd( nPid )
+ENDIF
 RETURN lOk
 #else
 HB_SYMBOL_UNUSED( cDocx )
@@ -1725,21 +1755,61 @@ RETURN .F.
 #endif
 
 #if defined( __PLATFORM__WINDOWS )
+// PID-ovi pokrenutih WINWORD.EXE (WMI); NIL ako WMI nije dostupan
+STATIC FUNCTION _WordPids()
+LOCAL aPid := {}, oWmi, oProc
+BEGIN SEQUENCE WITH {| e | Break( e ) }
+   oWmi := Do( "WIN_OLECREATEOBJECT", "WbemScripting.SWbemLocator" ):ConnectServer()
+   FOR EACH oProc IN oWmi:ExecQuery( "SELECT ProcessId FROM Win32_Process WHERE Name='WINWORD.EXE'" )
+      AAdd( aPid, oProc:ProcessId )
+   NEXT
+RECOVER
+   aPid := NIL
+END SEQUENCE
+RETURN aPid
+
+// Word koji smo mi pokrenuli: do 5 sekundi da se zatvori sam, inace se gasi
+STATIC PROCEDURE _WordEnd( nPid )
+LOCAL n, a
+FOR n := 1 TO 25
+   a := _WordPids()
+   IF a == NIL .OR. AScan( a, nPid ) == 0
+      RETURN
+   ENDIF
+   hb_idleSleep( 0.2 )
+NEXT
+BEGIN SEQUENCE WITH {| e | Break( e ) }
+   FOR EACH a IN Do( "WIN_OLECREATEOBJECT", "WbemScripting.SWbemLocator" ):ConnectServer():ExecQuery( ;
+                 "SELECT * FROM Win32_Process WHERE ProcessId=" + hb_ntos( nPid ) )
+      a:Terminate()
+   NEXT
+END SEQUENCE
+RETURN
+#endif
+
+#if defined( __PLATFORM__WINDOWS )
 // Word preko PowerShella (COM), za programe bez hbwin
 STATIC FUNCTION _PdfWordPS( cDocx, cPdf, cErr )
 LOCAL cPs1 := hb_DirSepAdd( hb_DirTemp() ) + "docx_pdf_word.ps1", cStd := "", cErrOut := ""
 LOCAL cScript := ;
-   "$ErrorActionPreference = 'Stop'; $rc = 0" + hb_eol() + ;
+   "$ErrorActionPreference = 'Stop'; $rc = 0; $d = $null" + hb_eol() + ;
+   "$before = @(Get-Process WINWORD -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })" + hb_eol() + ;
    "try { $w = New-Object -ComObject Word.Application } catch { [Console]::Error.WriteLine('Word is not installed'); exit 2 }" + hb_eol() + ;
+   "$mine = @(Get-Process WINWORD -ErrorAction SilentlyContinue | ForEach-Object { $_.Id } | Where-Object { $before -notcontains $_ })" + hb_eol() + ;
+   "$own = ($mine.Count -gt 0) -or ($before.Count -eq 0)" + hb_eol() + ;
    "try {" + hb_eol() + ;
-   "  $w.Visible = $false; $w.DisplayAlerts = 0" + hb_eol() + ;
+   "  if ($own) { $w.Visible = $false }; $w.DisplayAlerts = 0" + hb_eol() + ;
+   "  try { $w.AutomationSecurity = 3 } catch {}" + hb_eol() + ;
    "  $d = $w.Documents.Open($args[0], $false, $true, $false)" + hb_eol() + ;
    "  foreach ($t in $d.TablesOfContents) { $t.Update() }" + hb_eol() + ;
    "  [void]$d.Fields.Update()" + hb_eol() + ;
    "  $d.ExportAsFixedFormat($args[1], 17)" + hb_eol() + ;
-   "  $d.Close($false)" + hb_eol() + ;
    "} catch { [Console]::Error.WriteLine($_.Exception.Message); $rc = 1 }" + hb_eol() + ;
-   "$w.Quit($false); [void][Runtime.InteropServices.Marshal]::ReleaseComObject($w); exit $rc" + hb_eol()
+   "if ($d) { try { $d.Close(0) } catch {}; [void][Runtime.InteropServices.Marshal]::ReleaseComObject($d) }" + hb_eol() + ;
+   "if ($own) { try { $w.NormalTemplate.Saved = $true } catch {}; try { $w.Quit(0) } catch {} }" + hb_eol() + ;
+   "[void][Runtime.InteropServices.Marshal]::ReleaseComObject($w)" + hb_eol() + ;
+   "foreach ($p in $mine) { try { $pr = Get-Process -Id $p -ErrorAction Stop; if (-not $pr.WaitForExit(5000)) { Stop-Process -Id $p -Force } } catch {} }" + hb_eol() + ;
+   "exit $rc" + hb_eol()
 IF ! hb_MemoWrit( cPs1, cScript )
    cErr += "Word: ne mogu da napravim " + cPs1 + ". "
    RETURN .F.

@@ -274,8 +274,11 @@ IF ! oDoc:SavePDF( "report.pdf" )
 ENDIF
 ```
 
-- **Word** (Windows): through OLE when the program links `hbwin` (`win_oleCreateObject()`), else through
-  PowerShell - no extra library is needed. Word also updates the table of contents and the fields.
+- **Word** (Windows): through OLE when the program links `hbwin` and uses `win_oleCreateObject()` (or has
+  `REQUEST WIN_OLECREATEOBJECT`), else through PowerShell - no extra library is needed. Word also updates
+  the table of contents and the fields. Only the Word that `SavePDF()` started is closed: a Word the user
+  has open is not hidden or closed. If that Word does not end after `Quit()` (a dialog, "Word is busy"),
+  it is ended after 5 seconds - only that process, found by its PID.
 - **LibreOffice** (Windows, Linux, macOS): `soffice --headless --convert-to pdf` with its own profile in the
   temp folder, so it works while LibreOffice is open. `soffice` is found in the registry, the usual folders
   and the `PATH`; or set `DOCX_SOFFICE=D:\LibreOffice\program\soffice.exe`. LibreOffice does not fill the
