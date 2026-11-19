@@ -3,9 +3,11 @@ Samples for DOCXClass.prg
   DOCXWriter.prg   - title, table of contents, headings, formatted text, lists, tables, pictures, link, header/footer -> sample.docx
   DOCXTemplate.prg - creates template.docx with {{placeholders}} and fills it -> invoice.docx
   DOCXReader.prg   - reads paragraphs and tables (default invoice.docx, or: docxreader sample.docx)
+  DOCXChart.prg    - column, bar, line, area, pie and doughnut charts -> charts.docx
 
-Build all three: build.bat (Windows) or ./build.sh (Linux); hbmk2 options
+Build all samples: build.bat (Windows) or ./build.sh (Linux); hbmk2 options
 are passed on, e.g. build -comp=bcc. Or one by one:
   hbmk2 docxwriter.hbp
   hbmk2 docxtemplate.hbp
   hbmk2 docxreader.hbp
+  hbmk2 docxchart.hbp

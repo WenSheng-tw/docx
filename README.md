@@ -12,6 +12,7 @@ Everything is in one source file: `DOCXClass.prg`. It is the companion of the [x
 - Tables: column widths, borders, shading, merged cells (horizontal and vertical), vertical alignment,
   header rows repeated on every page, number formats per column; a cell can hold several paragraphs, pictures or another table
 - Pictures (PNG, JPG, GIF, BMP) in their own paragraph, inside a line of text or in a table cell
+- Charts: column, bar, line, area, pie, doughnut; the data also in an embedded workbook (Word: Edit Data)
 - Hyperlinks, page breaks, page number fields, table of contents
 - Header and footer, with Excel-like codes `&P`, `&N`, `&D`, `&T`, `&F`
 - Page setup: paper size, orientation, margins
@@ -29,7 +30,7 @@ hbmk2 myapp.prg DOCXClass.prg hbmzip.hbc
 ```
 
 The `samples` folder has ready-made `.hbp` files; `build.bat` (Windows) or `./build.sh` (Linux)
-builds all three and passes hbmk2 options on (`build -comp=bcc`):
+builds all samples and passes hbmk2 options on (`build -comp=bcc`):
 
 ```
 cd samples
@@ -39,6 +40,7 @@ rem or one by one:
 hbmk2 docxwriter.hbp
 hbmk2 docxtemplate.hbp
 hbmk2 docxreader.hbp
+hbmk2 docxchart.hbp
 ```
 
 The class can be linked together with `XLSXClass.prg` in the same program.
@@ -201,6 +203,28 @@ oDoc:Paragraph( "Signature: " ):Picture( "sign.png", , 1 ):Text( " (1 cm high)" 
 With only the width or only the height the other side is proportional.
 A missing file is skipped and `oDoc:cError` gets its name (check it before `Save()`, which clears `cError`).
 
+### Charts
+
+```harbour
+// Chart( cTitle, cType, aCategories, aSeries, nWidth, nHeight, nAlign ) -> DocxChart
+// cType: "bar" (columns), "hbar" (horizontal bars), "line", "area", "pie", "doughnut"
+oChart := oDoc:Chart( "Sales 2026", "bar", { "Jan", "Feb", "Mar" }, ;
+                      { { "Beograd", { 120, 150, 90 } }, { "Novi Sad", { 80, 95, 110 }, "70AD47" } }, , , 2 )
+oChart:lValues    := .T.                     // values at the columns / points (pie: instead of percents)
+oChart:cNumFormat := "#,##0"                 // axis and values
+oChart:cValTitle  := "thousand RSD"          // axis titles: cValTitle, cCatTitle
+oChart:lLegend    := .F.
+oChart:aColors    := { "264478", "4472C4" }  // series colors (pie, doughnut: the slices)
+
+oDoc:Chart( "Share", "pie", { "A", "B", "C" }, { 44, 32, 23 }, 12, 7 )   // one series: just the values
+oTable:Cell( 1, 1 ):Chart( "Beograd", "line", aMonths, { aValues }, 7.5, 5 )
+```
+
+`aSeries` is `{ { cName, aValues [, cColor ] }, ... }` or only an array of numbers (one series); `oChart:AddSeries( cName, aValues, cColor )`
+adds one more. A pie shows the first series. Default size: the width of the text (at most 15 cm), height 0.6 of the width.
+The values are written into the chart (Word, LibreOffice draw it from them) and into an embedded workbook,
+so right click - Edit Data in Word opens them in Excel.
+
 ### Header, footer, page setup
 
 ```harbour
@@ -315,6 +339,7 @@ ENDIF
 | `samples/DOCXWriter.prg` | title, table of contents, headings, formatted text, lists, tables with totals and merged cells, pictures, a link, header and footer |
 | `samples/DOCXTemplate.prg` | creates `template.docx` with placeholders and fills it: replacements, repeated table rows, new content at a marker |
 | `samples/DOCXReader.prg` | reads a document: paragraphs with styles, tables |
+| `samples/DOCXChart.prg` | charts: column, line with values, horizontal bars in own colors, pie, doughnut, area, charts in a table cell |
 
 ## License
 

@@ -29,11 +29,16 @@ REQUEST HB_CODEPAGE_UTF8EX
 #define NS_CT      "http://schemas.openxmlformats.org/package/2006/content-types"
 #define REL_OFFICE "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
 #define CT_WML     "application/vnd.openxmlformats-officedocument.wordprocessingml."
+#define NS_C       "http://schemas.openxmlformats.org/drawingml/2006/chart"
+#define NS_SML     "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+#define CT_CHART   "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
+#define CT_XLSX    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 STATIC s_aAlign  := { "left", "center", "right", "both" }
 STATIC s_aVAlign := { "top", "center", "bottom" }
 STATIC s_aBorder := { "single", "double", "dotted", "dashed", "thick" }
 STATIC s_aListTypes := { "bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman" }
+STATIC s_aChartTypes := { "bar", "hbar", "line", "area", "pie", "doughnut" }
 
 // ---------------------------------------------------------------------------
 // Sadrzaj: niz pasusa i tabela. Isti kod sluzi za telo dokumenta (WordDocument
@@ -51,6 +56,7 @@ CLASS DocxContent
    METHOD ListItem( xText, nList, nLevel, nStyle )
    METHOD Table( xCols )
    METHOD Picture( cFile, nWidth, nHeight, nAlign )
+   METHOD Chart( cTitle, cType, aCategories, aSeries, nWidth, nHeight, nAlign )
    METHOD PageBreak()
    METHOD TableOfContents( cTitle, nLevels )
    METHOD XML( hCtx, lCell )
@@ -106,6 +112,19 @@ LOCAL oP := ::Paragraph()
 oP:nAlign := nAlign
 oP:Picture( cFile, nWidth, nHeight )
 RETURN oP
+
+// grafikon u svom pasusu; vraca DocxChart (boje, legenda, vrednosti, naslovi osa):
+//    oChart := oDoc:Chart( "Prodaja", "bar", { "Jan", "Feb" }, { { "Beograd", { 120, 150 } } } )
+//    oChart:lValues := .T.
+// cType: "bar" (uspravni stubici), "hbar" (vodoravni), "line", "area", "pie",
+// "doughnut"; nWidth / nHeight u cm (podrazumevano sirina teksta, najvise 15,
+// visina 0.6 sirine), nAlign 1 levo, 2 centar, 3 desno
+METHOD Chart( cTitle, cType, aCategories, aSeries, nWidth, nHeight, nAlign ) CLASS DocxContent
+LOCAL oP := ::Paragraph(), oChart := DocxChart():New( ::oDoc, cTitle, cType, aCategories, aSeries, nWidth, nHeight )
+oP:nAlign := nAlign
+AAdd( oP:aRuns, { "chart", oChart } )
+oChart:oParagraph := oP
+RETURN oChart
 
 METHOD PageBreak() CLASS DocxContent
 LOCAL oP := ::Paragraph()
@@ -264,12 +283,223 @@ FOR EACH a IN ::aRuns
                   '<w:r><w:fldChar w:fldCharType="end"/></w:r>' )
    CASE a[ 1 ] == "pic"
       AAdd( aOut, _PictureXML( hCtx, a[ 2 ], a[ 3 ], a[ 4 ] ) )
+   CASE a[ 1 ] == "chart"
+      AAdd( aOut, _ChartRunXML( hCtx, a[ 2 ] ) )
    CASE a[ 1 ] == "br"
       AAdd( aOut, IIF( a[ 2 ] == "page", '<w:r><w:br w:type="page"/></w:r>', "<w:r><w:br/></w:r>" ) )
    ENDCASE
 NEXT
 AAdd( aOut, "</w:p>" )
 RETURN _Join( aOut, "" )
+
+// ---------------------------------------------------------------------------
+// Grafikon (word/charts/chartN.xml). Vrednosti su u samom grafikonu (Word ga
+// crta iz njih), a i u ugradjenoj Excel tabeli (word/embeddings/...xlsx), pa u
+// Wordu radi desni klik - Edit Data.
+//    aCategories: nazivi na osi (tekst, brojevi, datumi)
+//    aSeries:     { { cIme, aVrednosti [, cBoja ] }, ... } ili samo niz brojeva
+//                 (jedna serija); pita prikazuje samo prvu seriju
+// ---------------------------------------------------------------------------
+CLASS DocxChart
+   DATA oDoc
+   DATA oParagraph               // pasus grafikona (oChart:oParagraph:nAlign)
+   DATA cTitle INIT ""
+   DATA cType INIT "bar"
+   DATA aCategories
+   DATA aSeries                  // { { cIme, aVrednosti, cBoja }, ... }
+   DATA nWidth                   // cm
+   DATA nHeight
+   DATA lLegend INIT .T.
+   DATA lValues INIT .F.         // vrednosti uz stubice / tacke (pita: umesto procenata)
+   DATA cNumFormat INIT "General" // format brojeva na osi i uz vrednosti, npr. "#,##0.00"
+   DATA cCatTitle INIT ""        // naslov ose kategorija
+   DATA cValTitle INIT ""        // naslov ose vrednosti
+   DATA aColors                  // RGB boje serija (pita: boje delova)
+   METHOD New( oDoc, cTitle, cType, aCategories, aSeries, nWidth, nHeight )
+   METHOD AddSeries( cName, aValues, cColor )
+   METHOD Color( n )
+   METHOD Points()
+   METHOD ChartXML( cDataRId )
+   METHOD SeriesXML( n )
+   METHOD SheetXML()
+ENDCLASS
+
+METHOD New( oDoc, cTitle, cType, aCategories, aSeries, nWidth, nHeight ) CLASS DocxChart
+LOCAL x
+::oDoc := oDoc
+::cTitle := IIF( HB_ISSTRING( cTitle ), cTitle, "" )
+IF HB_ISSTRING( cType ) .AND. AScan( s_aChartTypes, Lower( AllTrim( cType ) ) ) > 0
+   ::cType := Lower( AllTrim( cType ) )
+ENDIF
+::aCategories := IIF( HB_ISARRAY( aCategories ), aCategories, {} )
+::aSeries := {}
+IF HB_ISARRAY( aSeries ) .AND. ! Empty( aSeries )
+   IF HB_ISARRAY( aSeries[ 1 ] )
+      FOR EACH x IN aSeries
+         IF HB_ISARRAY( x )
+            ::AddSeries( _AGet( x, 1 ), _AGet( x, 2 ), _AGet( x, 3 ) )
+         ENDIF
+      NEXT
+   ELSE
+      ::AddSeries( NIL, aSeries )           // samo vrednosti: jedna serija
+   ENDIF
+ENDIF
+::nWidth  := IIF( HB_ISNUMERIC( nWidth ) .AND. nWidth > 0, nWidth, NIL )
+::nHeight := IIF( HB_ISNUMERIC( nHeight ) .AND. nHeight > 0, nHeight, NIL )
+// Office paleta
+::aColors := { "4472C4", "ED7D31", "A5A5A5", "FFC000", "5B9BD5", "70AD47", ;
+               "264478", "9E480E", "636363", "997300", "255E91", "43682B" }
+RETURN Self
+
+METHOD AddSeries( cName, aValues, cColor ) CLASS DocxChart
+AAdd( ::aSeries, { IIF( HB_ISNIL( cName ), "Series " + hb_NToS( Len( ::aSeries ) + 1 ), _Str( cName ) ), ;
+                   IIF( HB_ISARRAY( aValues ), aValues, {} ), ;
+                   IIF( HB_ISSTRING( cColor ) .AND. ! Empty( cColor ), _RGB( cColor ), NIL ) } )
+RETURN Self
+
+// boja serije n (pita / prsten: dela n)
+METHOD Color( n ) CLASS DocxChart
+IF n <= Len( ::aSeries ) .AND. ::aSeries[ n ][ 3 ] != NIL .AND. !( ::cType == "pie" .OR. ::cType == "doughnut" )
+   RETURN ::aSeries[ n ][ 3 ]
+ENDIF
+RETURN _RGB( ::aColors[ ( n - 1 ) % Len( ::aColors ) + 1 ] )
+
+// broj tacaka: najvise od kategorija i vrednosti
+METHOD Points() CLASS DocxChart
+LOCAL n := Len( ::aCategories ), a
+FOR EACH a IN ::aSeries
+   n := Max( n, Len( a[ 2 ] ) )
+NEXT
+RETURN n
+
+// redosled elemenata prati OOXML semu (Word odbija drugaciji redosled)
+METHOD ChartXML( cDataRId ) CLASS DocxChart
+LOCAL c := "", i, lPie := ( ::cType == "pie" .OR. ::cType == "doughnut" ), lH := ( ::cType == "hbar" )
+LOCAL cLn := '<c:spPr><a:ln w="9525">' + _ChFill( "BFBFBF" ) + "</a:ln></c:spPr>"
+LOCAL cSer := "", cLbl := "", nSer := IIF( ::cType == "pie", Min( 1, Len( ::aSeries ) ), Len( ::aSeries ) )
+FOR i := 1 TO nSer
+   cSer += ::SeriesXML( i )
+NEXT
+IF ::lValues .AND. ! lPie
+   cLbl := '<c:dLbls><c:numFmt formatCode="' + XmlEsc( ::cNumFormat ) + '" sourceLinked="0"/>' + ;
+           '<c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/>' + ;
+           '<c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>'
+ENDIF
+c += XML_HEAD + '<c:chartSpace xmlns:c="' + NS_C + '" xmlns:a="' + NS_A + '" xmlns:r="' + NS_R + '">'
+c += '<c:date1904 val="0"/><c:roundedCorners val="0"/><c:chart>'
+IF ! Empty( ::cTitle )
+   c += "<c:title>" + _ChRich( ::oDoc, ::cTitle, 1400, .T., .F. ) + '<c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>'
+ELSE
+   c += '<c:autoTitleDeleted val="1"/>'
+ENDIF
+c += "<c:plotArea><c:layout/>"
+DO CASE
+CASE ::cType == "pie"
+   c += '<c:pieChart><c:varyColors val="1"/>' + cSer + '<c:firstSliceAng val="0"/></c:pieChart>'
+CASE ::cType == "doughnut"
+   c += '<c:doughnutChart><c:varyColors val="1"/>' + cSer + '<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>'
+CASE ::cType == "line"
+   c += '<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>' + cSer + cLbl + ;
+        '<c:marker val="1"/><c:axId val="5001"/><c:axId val="5002"/></c:lineChart>'
+CASE ::cType == "area"
+   c += '<c:areaChart><c:grouping val="standard"/><c:varyColors val="0"/>' + cSer + cLbl + ;
+        '<c:axId val="5001"/><c:axId val="5002"/></c:areaChart>'
+OTHERWISE
+   c += '<c:barChart><c:barDir val="' + IIF( lH, "bar", "col" ) + '"/><c:grouping val="clustered"/><c:varyColors val="0"/>' + ;
+        cSer + cLbl + '<c:gapWidth val="150"/><c:axId val="5001"/><c:axId val="5002"/></c:barChart>'
+ENDCASE
+IF ! lPie
+   // vodoravni stubici: kategorije odozgo nadole, kao u tabeli
+   c += '<c:catAx><c:axId val="5001"/><c:scaling><c:orientation val="' + IIF( lH, "maxMin", "minMax" ) + '"/></c:scaling>' + ;
+        '<c:delete val="0"/><c:axPos val="' + IIF( lH, "l", "b" ) + '"/>' + ;
+        IIF( Empty( ::cCatTitle ), "", "<c:title>" + _ChRich( ::oDoc, ::cCatTitle, 1000, .F., lH ) + '<c:overlay val="0"/></c:title>' ) + ;
+        '<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/>' + ;
+        '<c:tickLblPos val="low"/>' + cLn + '<c:crossAx val="5002"/><c:crosses val="autoZero"/><c:auto val="1"/>' + ;
+        '<c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>'
+   c += '<c:valAx><c:axId val="5002"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/>' + ;
+        '<c:axPos val="' + IIF( lH, "b", "l" ) + '"/>' + ;
+        '<c:majorGridlines><c:spPr><a:ln w="9525">' + _ChFill( "D9D9D9" ) + "</a:ln></c:spPr></c:majorGridlines>" + ;
+        IIF( Empty( ::cValTitle ), "", "<c:title>" + _ChRich( ::oDoc, ::cValTitle, 1000, .F., ! lH ) + '<c:overlay val="0"/></c:title>' ) + ;
+        '<c:numFmt formatCode="' + XmlEsc( ::cNumFormat ) + '" sourceLinked="0"/><c:majorTickMark val="out"/>' + ;
+        '<c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>' + cLn + '<c:crossAx val="5001"/>' + ;
+        '<c:crosses val="' + IIF( lH, "max", "autoZero" ) + '"/><c:crossBetween val="between"/></c:valAx>'
+ENDIF
+c += "</c:plotArea>"
+IF ::lLegend
+   c += '<c:legend><c:legendPos val="' + IIF( lPie, "r", "b" ) + '"/><c:overlay val="0"/></c:legend>'
+ENDIF
+c += '<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>'
+c += "<c:spPr>" + _ChFill( "FFFFFF" ) + '<a:ln w="9525">' + _ChFill( "D9D9D9" ) + "</a:ln></c:spPr>"
+IF ! Empty( cDataRId )
+   c += '<c:externalData r:id="' + cDataRId + '"><c:autoUpdate val="0"/></c:externalData>'
+ENDIF
+c += "</c:chartSpace>"
+RETURN c
+
+// serija n: ime iz celije <kolona>1, kategorije A2:A<n>, vrednosti <kolona>2:<kolona><n>
+METHOD SeriesXML( n ) CLASS DocxChart
+LOCAL c, i, x, nPt := ::Points(), cCol := _ChColName( n + 1 ), cLast := hb_NToS( nPt + 1 ), cCol1 := ::Color( n )
+LOCAL cWhite := '<a:ln w="12700">' + _ChFill( "FFFFFF" ) + "</a:ln>", cCache := "", aVal := ::aSeries[ n ][ 2 ]
+c := '<c:ser><c:idx val="' + hb_NToS( n - 1 ) + '"/><c:order val="' + hb_NToS( n - 1 ) + '"/>' + ;
+     "<c:tx><c:strRef><c:f>Sheet1!$" + cCol + "$1</c:f>" + ;
+     '<c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>' + XmlEsc( ::oDoc:ToUTF8( ::aSeries[ n ][ 1 ] ) ) + "</c:v></c:pt></c:strCache></c:strRef></c:tx>"
+DO CASE
+CASE ::cType == "line"
+   c += '<c:spPr><a:ln w="28575" cap="rnd">' + _ChFill( cCol1 ) + "<a:round/></a:ln></c:spPr>" + ;
+        '<c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr>' + _ChFill( cCol1 ) + '<a:ln w="9525">' + _ChFill( cCol1 ) + "</a:ln></c:spPr></c:marker>"
+CASE ::cType == "pie" .OR. ::cType == "doughnut"
+   c += "<c:spPr>" + cWhite + "</c:spPr>"
+   FOR i := 1 TO nPt                                   // boja svakog dela
+      c += '<c:dPt><c:idx val="' + hb_NToS( i - 1 ) + '"/><c:bubble3D val="0"/><c:spPr>' + _ChFill( ::Color( i ) ) + cWhite + "</c:spPr></c:dPt>"
+   NEXT
+   c += '<c:dLbls><c:numFmt formatCode="' + XmlEsc( IIF( ::lValues, ::cNumFormat, "0%" ) ) + '" sourceLinked="0"/>' + ;
+        '<c:showLegendKey val="0"/><c:showVal val="' + IIF( ::lValues, "1", "0" ) + '"/><c:showCatName val="0"/>' + ;
+        '<c:showSerName val="0"/><c:showPercent val="' + IIF( ::lValues, "0", "1" ) + '"/><c:showBubbleSize val="0"/>' + ;
+        IIF( ::cType == "pie", '<c:showLeaderLines val="1"/>', "" ) + "</c:dLbls>"
+CASE ::cType == "area"
+   c += "<c:spPr>" + _ChFill( cCol1 ) + "</c:spPr>"
+OTHERWISE
+   c += "<c:spPr>" + _ChFill( cCol1 ) + '</c:spPr><c:invertIfNegative val="0"/>'
+ENDCASE
+// kategorije
+FOR i := 1 TO nPt
+   x := _AGet( ::aCategories, i )
+   cCache += '<c:pt idx="' + hb_NToS( i - 1 ) + '"><c:v>' + XmlEsc( ::oDoc:ToUTF8( IIF( x == NIL, hb_NToS( i ), _Str( x ) ) ) ) + "</c:v></c:pt>"
+NEXT
+c += "<c:cat><c:strRef><c:f>Sheet1!$A$2:$A$" + cLast + '</c:f><c:strCache><c:ptCount val="' + hb_NToS( nPt ) + '"/>' + ;
+     cCache + "</c:strCache></c:strRef></c:cat>"
+// vrednosti (prazna = rupa)
+cCache := ""
+FOR i := 1 TO nPt
+   x := _AGet( aVal, i )
+   IF HB_ISNUMERIC( x )
+      cCache += '<c:pt idx="' + hb_NToS( i - 1 ) + '"><c:v>' + hb_NToS( x ) + "</c:v></c:pt>"
+   ENDIF
+NEXT
+c += "<c:val><c:numRef><c:f>Sheet1!$" + cCol + "$2:$" + cCol + "$" + cLast + "</c:f><c:numCache><c:formatCode>General</c:formatCode>" + ;
+     '<c:ptCount val="' + hb_NToS( nPt ) + '"/>' + cCache + "</c:numCache></c:numRef></c:val>"
+IF ::cType == "line"
+   c += '<c:smooth val="0"/>'
+ENDIF
+RETURN c + "</c:ser>"
+
+// list ugradjene Excel tabele: A2.. kategorije, B1.. imena serija, ispod vrednosti
+METHOD SheetXML() CLASS DocxChart
+LOCAL aRows := {}, c, i, k, x, nPt := ::Points()
+c := '<row r="1">'
+FOR k := 1 TO Len( ::aSeries )
+   c += _ChCell( _ChColName( k + 1 ) + "1", ::oDoc:ToUTF8( ::aSeries[ k ][ 1 ] ) )
+NEXT
+AAdd( aRows, c + "</row>" )
+FOR i := 1 TO nPt
+   x := _AGet( ::aCategories, i )
+   c := '<row r="' + hb_NToS( i + 1 ) + '">' + _ChCell( "A" + hb_NToS( i + 1 ), ::oDoc:ToUTF8( IIF( x == NIL, hb_NToS( i ), _Str( x ) ) ) )
+   FOR k := 1 TO Len( ::aSeries )
+      c += _ChCell( _ChColName( k + 1 ) + hb_NToS( i + 1 ), _AGet( ::aSeries[ k ][ 2 ], i ) )
+   NEXT
+   AAdd( aRows, c + "</row>" )
+NEXT
+RETURN XML_HEAD + '<worksheet xmlns="' + NS_SML + '"><sheetData>' + _Join( aRows, "" ) + "</sheetData></worksheet>"
 
 // ---------------------------------------------------------------------------
 // Tabela. Celija je DocxContent, pa moze da sadrzi vise pasusa, slike i
@@ -1279,6 +1509,87 @@ RETURN '<w:r><w:drawing><wp:inline xmlns:wp="' + NS_WP + '" distT="0" distB="0" 
    '<pic:blipFill><a:blip xmlns:r="' + NS_R + '" r:embed="' + cRId + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' + ;
    '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + nW + '" cy="' + nH + '"/></a:xfrm>' + ;
    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'
+
+// grafikon u redu teksta: deo word/charts/chartN.xml, njegova Excel tabela i relacije
+STATIC FUNCTION _ChartRunXML( hCtx, oChart )
+LOCAL hOut := hCtx[ "out" ], cDir := hCtx[ "dir" ], cPart, cXlsx, cRId, cDataRId := "", cData, cOld, nId, nW, nH
+cPart := _FreePart( hOut, cDir + "charts/chart", ".xml" )
+hOut[ cPart ] := ""                                    // zauzeto (ime za sledeci grafikon)
+_CTOverride( hOut, cPart, CT_CHART )
+cData := _ChXlsx( oChart )
+IF ! Empty( cData )
+   cXlsx := _FreePart( hOut, cDir + "embeddings/Microsoft_Excel_Worksheet", ".xlsx" )
+   hOut[ cXlsx ] := cData
+   _CTDefault( hOut, "xlsx", CT_XLSX )
+   cOld := hCtx[ "part" ]
+   hCtx[ "part" ] := cPart
+   cDataRId := _AddRel( hCtx, "package", "../" + hb_BSubStr( cXlsx, Len( cDir ) + 1 ) )
+   hCtx[ "part" ] := cOld
+ENDIF
+hOut[ cPart ] := oChart:ChartXML( cDataRId )
+cRId := _AddRel( hCtx, "chart", hb_BSubStr( cPart, Len( cDir ) + 1 ) )
+nW := IIF( oChart:nWidth == NIL, Min( 15, hCtx[ "textWidth" ] ), oChart:nWidth )
+nH := IIF( oChart:nHeight == NIL, nW * 0.6, oChart:nHeight )
+nId := ++hCtx[ "docPr" ]
+RETURN '<w:r><w:drawing><wp:inline xmlns:wp="' + NS_WP + '" distT="0" distB="0" distL="0" distR="0">' + ;
+   '<wp:extent cx="' + hb_NToS( CM2EMU( nW ) ) + '" cy="' + hb_NToS( CM2EMU( nH ) ) + '"/><wp:effectExtent l="0" t="0" r="0" b="0"/>' + ;
+   '<wp:docPr id="' + hb_NToS( nId ) + '" name="Chart ' + hb_NToS( nId ) + '"/><wp:cNvGraphicFramePr/>' + ;
+   '<a:graphic xmlns:a="' + NS_A + '"><a:graphicData uri="' + NS_C + '">' + ;
+   '<c:chart xmlns:c="' + NS_C + '" xmlns:r="' + NS_R + '" r:id="' + cRId + '"/>' + ;
+   "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"
+
+// najmanji .xlsx sa podacima grafikona (Edit Data u Wordu); "" ako ne uspe
+STATIC FUNCTION _ChXlsx( oChart )
+LOCAL h := { => }, cTmp, nH, cData := ""
+h[ "[Content_Types].xml" ] := XML_HEAD + '<Types xmlns="' + NS_CT + '">' + ;
+   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' + ;
+   '<Default Extension="xml" ContentType="application/xml"/>' + ;
+   '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' + ;
+   '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' + ;
+   "</Types>"
+h[ "_rels/.rels" ] := XML_HEAD + '<Relationships xmlns="' + NS_PKG + '">' + ;
+   '<Relationship Id="rId1" Type="' + REL_OFFICE + 'officeDocument" Target="xl/workbook.xml"/></Relationships>'
+h[ "xl/workbook.xml" ] := XML_HEAD + '<workbook xmlns="' + NS_SML + '" xmlns:r="' + NS_R + '">' + ;
+   '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>'
+h[ "xl/_rels/workbook.xml.rels" ] := XML_HEAD + '<Relationships xmlns="' + NS_PKG + '">' + ;
+   '<Relationship Id="rId1" Type="' + REL_OFFICE + 'worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+h[ "xl/worksheets/sheet1.xml" ] := oChart:SheetXML()
+IF ( nH := hb_FTempCreateEx( @cTmp, , "docx", ".xlsx" ) ) != -1
+   FClose( nH )
+   IF _ZipWrite( cTmp, h )
+      cData := hb_MemoRead( cTmp )
+   ENDIF
+   FErase( cTmp )
+ENDIF
+RETURN cData
+
+// celija lista: broj ili tekst (inline, bez sharedStrings.xml); NIL = prazna
+STATIC FUNCTION _ChCell( cRef, x )
+IF HB_ISNUMERIC( x )
+   RETURN '<c r="' + cRef + '"><v>' + hb_NToS( x ) + "</v></c>"
+ELSEIF HB_ISNIL( x )
+   RETURN ""
+ENDIF
+RETURN '<c r="' + cRef + '" t="inlineStr"><is><t xml:space="preserve">' + XmlEsc( _Str( x ) ) + "</t></is></c>"
+
+// 1 -> A, 27 -> AA
+STATIC FUNCTION _ChColName( n )
+LOCAL c := ""
+DO WHILE n > 0
+   c := Chr( 65 + ( n - 1 ) % 26 ) + c
+   n := Int( ( n - 1 ) / 26 )
+ENDDO
+RETURN c
+
+STATIC FUNCTION _ChFill( cRGB )
+RETURN '<a:solidFill><a:srgbClr val="' + cRGB + '"/></a:solidFill>'
+
+// tekst naslova grafikona / ose; lVert: uspravno (osa vrednosti levo)
+STATIC FUNCTION _ChRich( oDoc, cText, nSize, lBold, lVert )
+LOCAL cSz := hb_NToS( nSize ), cB := IIF( lBold, "1", "0" )
+RETURN "<c:tx><c:rich><a:bodyPr" + IIF( lVert, ' rot="-5400000" vert="horz"', "" ) + "/><a:lstStyle/><a:p>" + ;
+   '<a:pPr><a:defRPr sz="' + cSz + '" b="' + cB + '"/></a:pPr><a:r><a:rPr lang="' + XmlEsc( oDoc:cLanguage ) + ;
+   '" sz="' + cSz + '" b="' + cB + '"/><a:t>' + XmlEsc( oDoc:ToUTF8( cText ) ) + "</a:t></a:r></a:p></c:rich></c:tx>"
 
 // velicina slike u pikselima iz zaglavlja PNG, JPEG, GIF, BMP; { 0, 0 } ako nije poznata
 STATIC FUNCTION _ImageSize( c )
