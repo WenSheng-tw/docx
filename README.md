@@ -322,8 +322,13 @@ ENDIF
 | `fontsize`, `size` | the font size (0: what fits), the room for the signature in bytes (20000) |
 
 `PDF_Certificates()` lists the personal certificates of Windows: `{ cThumbprint, cName, cIssuer, cValidTo, lHasKey }`.
-Not done: encrypted PDFs; the text of the signature is Helvetica (the letters of Western Europe), the
-`/Rotate` of a page is not taken into account; no time stamp server (the time is that of the computer).
+In Serbia: the certificate of the ID card (MUP) or of a token (Pošta, Halcom, PKS, E-Smart ...) is in the
+Windows store once the middleware of its issuer is installed, and is chosen and used like any other (Windows
+asks for the PIN). The cloud signature of eUprava (ConsentID) is not in the store and cannot be used here.
+
+Not done: encrypted PDFs; the text of the signature is Helvetica (the letters of Western Europe and
+č ć đ š ž, no Cyrillic); the `/Rotate` of a page is not taken into account; no time stamp server (the time
+is that of the computer).
 
 ### Coming from Word OLE automation
 

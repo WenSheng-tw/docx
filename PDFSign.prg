@@ -40,8 +40,8 @@
  *   "size"      mesto za potpis u bajtovima (podrazumevano 20000)
  *
  * Ogranicenja: sifrovani PDF se ne potpisuje; tekst potpisa je Helvetica
- * (WinAnsi: latinica zapadne Evrope, c c d se pisu bez kvacica); /Rotate
- * strane se ne uzima u obzir.
+ * (latinica zapadne Evrope i č ć đ š ž, bez cirilice); /Rotate strane se ne
+ * uzima u obzir.
 */
 
 #include "fileio.ch"
@@ -187,7 +187,10 @@ FUNCTION PDF_Sign( cIn, cOut, hOpt, cErr )
    AAdd( aObj, { nAP, "<< /Type /XObject /Subtype /Form /BBox [0 0 " + _PS_N( nW ) + " " + _PS_N( nH ) + "]" + ;
                       " /Resources << /Font << /F1 " + hb_ntos( nFont ) + " 0 R >> >> /Length " + hb_ntos( hb_BLen( cAp ) ) + ;
                       " >>" + Chr( 10 ) + "stream" + Chr( 10 ) + cAp + Chr( 10 ) + "endstream" } )
-   AAdd( aObj, { nFont, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>" } )
+   /* WinAnsi, and in its unused codes the letters of Serbian / Croatian it has not (c c d) */
+   AAdd( aObj, { nFont, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding" + ;
+                        " /BaseEncoding /WinAnsiEncoding /Differences [127 /dcroat 129 /Ccaron 141 /ccaron" + ;
+                        " 143 /Cacute 144 /cacute 157 /Dcroat] >> >>" } )
 
    /* the field into /AcroForm of the catalog */
    cAF := _PS_DictGet( cCat, "/AcroForm" )
@@ -1032,8 +1035,8 @@ STATIC FUNCTION _PS_WinAnsi( c )
       { 0x017D, 0x8E }, { 0x2018, 0x91 }, { 0x2019, 0x92 }, { 0x201C, 0x93 }, { 0x201D, 0x94 }, { 0x2022, 0x95 }, ;
       { 0x2013, 0x96 }, { 0x2014, 0x97 }, { 0x02DC, 0x98 }, { 0x2122, 0x99 }, { 0x0161, 0x9A }, { 0x203A, 0x9B }, ;
       { 0x0153, 0x9C }, { 0x017E, 0x9E }, { 0x0178, 0x9F }, ;
-      { 0x010C, Asc( "C" ) }, { 0x010D, Asc( "c" ) }, { 0x0106, Asc( "C" ) }, { 0x0107, Asc( "c" ) }, ;
-      { 0x0110, Asc( "D" ) }, { 0x0111, Asc( "d" ) } }, k
+      { 0x010C, 0x81 }, { 0x010D, 0x8D }, { 0x0106, 0x8F }, { 0x0107, 0x90 }, ;    // C c with caron / acute,
+      { 0x0110, 0x9D }, { 0x0111, 0x7F } }, k                                    // D d with stroke: /Differences
 
    IF ! hb_StrIsUTF8( c )
       c := hb_StrToUTF8( c )
