@@ -4,7 +4,8 @@ Samples for DOCXClass.prg
   DOCXTemplate.prg - creates template.docx with {{placeholders}} and fills it -> invoice.docx
   DOCXReader.prg   - reads paragraphs and tables (default invoice.docx, or: docxreader sample.docx)
 
-Build:
+Build all three: build.bat (Windows) or ./build.sh (Linux); hbmk2 options
+are passed on, e.g. build -comp=bcc. Or one by one:
   hbmk2 docxwriter.hbp
   hbmk2 docxtemplate.hbp
   hbmk2 docxreader.hbp

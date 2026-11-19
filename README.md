@@ -28,10 +28,14 @@ Add `DOCXClass.prg` to your project and link the `hbmzip` contrib (Harbour 3.2):
 hbmk2 myapp.prg DOCXClass.prg hbmzip.hbc
 ```
 
-The `samples` folder has ready-made `.hbp` files:
+The `samples` folder has ready-made `.hbp` files; `build.bat` (Windows) or `./build.sh` (Linux)
+builds all three and passes hbmk2 options on (`build -comp=bcc`):
 
 ```
 cd samples
+build
+
+rem or one by one:
 hbmk2 docxwriter.hbp
 hbmk2 docxtemplate.hbp
 hbmk2 docxreader.hbp
