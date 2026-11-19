@@ -6,11 +6,13 @@
 //   docxsign file.pdf                         signs file.pdf -> file_signed.pdf
 //   docxsign file.pdf row col                 at that row and column (row < 0: rows above the bottom)
 //   docxsign file.pdf row col cert.pfx pass   with a .pfx certificate (Linux: always)
+//   docxsign file.pdf row col cert.pfx        the password is asked (not shown, not in the command line)
 //
 // Windows without a .pfx: the window of Windows to choose the certificate (A1 installed,
 // A3 token or card - Windows asks for the PIN).
 // Build: hbmk2 docxsign.hbp
 #include "hbclass.ch"
+#include "inkey.ch"
 REQUEST HB_GT_WIN_DEFAULT
 REQUEST HB_CODEPAGE_UTF8EX
 
@@ -56,7 +58,7 @@ hOpt := { "row"      => IIF( Empty( cRow ), -10, Val( cRow ) ), ;
           "text"     => { "Assinado digitalmente por {name}", "Data: {date}", "Motivo: {reason}", "Local: {location}" } }
 IF ! Empty( cPfx )
    hOpt[ "pfx" ] := cPfx
-   hOpt[ "password" ] := hb_defaultValue( cPass, "" )
+   hOpt[ "password" ] := IIF( cPass == NIL, AskPassword( cPfx ), cPass )
 ENDIF
 
 cOut := hb_FNameExtSet( cPdf, "" ) + "_signed.pdf"
@@ -66,3 +68,27 @@ ELSE
    ? "Not signed:", cErr
 ENDIF
 RETURN
+
+/* the password of the .pfx, typed without showing it */
+STATIC FUNCTION AskPassword( cPfx )
+
+LOCAL cPass := "", nKey
+
+? "Password of " + cPfx + ": "
+DO WHILE ( nKey := Inkey( 0 ) ) != K_ENTER
+   DO CASE
+   CASE nKey == K_ESC
+      cPass := ""
+      EXIT
+   CASE nKey == K_BS
+      IF ! Empty( cPass )
+         cPass := Left( cPass, Len( cPass ) - 1 )
+         ?? Chr( 8 ) + " " + Chr( 8 )
+      ENDIF
+   CASE Len( hb_keyChar( nKey ) ) > 0
+      cPass += hb_keyChar( nKey )
+      ?? "*"
+   ENDCASE
+ENDDO
+?
+RETURN cPass
