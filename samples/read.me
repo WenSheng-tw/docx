@@ -4,6 +4,8 @@ Samples for DOCXClass.prg
   DOCXTemplate.prg - creates template.docx with {{placeholders}} and fills it -> invoice.docx
   DOCXReader.prg   - reads paragraphs and tables (default invoice.docx, or: docxreader sample.docx)
   DOCXChart.prg    - column, bar, line, area, pie and doughnut charts -> charts.docx
+  DOCXReport.prg   - a report as made with Word OLE, without Word: cover page, header with a logo,
+                     Page X of Y, contents, merged table rows, signatures -> report.docx, report.pdf
 
 Build all samples: build.bat (Windows) or ./build.sh (Linux); hbmk2 options
 are passed on, e.g. build -comp=bcc. Or one by one:
@@ -11,3 +13,4 @@ are passed on, e.g. build -comp=bcc. Or one by one:
   hbmk2 docxtemplate.hbp
   hbmk2 docxreader.hbp
   hbmk2 docxchart.hbp
+  hbmk2 docxreport.hbp

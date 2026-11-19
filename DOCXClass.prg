@@ -274,8 +274,12 @@ FOR EACH a IN ::aRuns
       AAdd( aOut, '<w:hyperlink xmlns:r="' + NS_R + '" r:id="' + _AddRel( hCtx, "hyperlink", a[ 3 ], .T. ) + '" w:history="1">' + ;
                   _RunXML( a[ 2 ], '<w:rStyle w:val="' + _StyleId( hCtx, "Hyperlink" ) + '"/>' + _RunRPr( ::oDoc, a[ 4 ], cDefR ) ) + ;
                   "</w:hyperlink>" )
+   CASE a[ 1 ] == "fld" .AND. a[ 2 ] == "NUMPAGES" .AND. ::oDoc:nPageStart > 1
+      // broj poslednje strane kad numeracija ne pocinje od 1
+      AAdd( aOut, _PagesXML( ::oDoc:nPageStart - 1, _RunRPr( ::oDoc, a[ 3 ], cDefR ) ) )
    CASE a[ 1 ] == "fld"
-      AAdd( aOut, '<w:fldSimple w:instr=" ' + XmlEsc( a[ 2 ] ) + ' ">' + _RunXML( a[ 4 ], _RunRPr( ::oDoc, a[ 3 ], cDefR ) ) + "</w:fldSimple>" )
+      // pun oblik polja (fldChar): svaki deo nosi font (LibreOffice ne cita font iz fldSimple)
+      AAdd( aOut, _FieldXML( a[ 2 ], a[ 4 ], _RunRPr( ::oDoc, a[ 3 ], cDefR ) ) )
    CASE a[ 1 ] == "toc"
       AAdd( aOut, '<w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r>' + ;
                   '<w:r><w:instrText xml:space="preserve"> ' + XmlEsc( a[ 2 ] ) + ' </w:instrText></w:r>' + ;
@@ -745,6 +749,8 @@ CLASS WordDocument INHERIT DocxContent
    DATA nHeaderMargin INIT 1.25
    DATA nFooterMargin INIT 1.25
    DATA lUpdateFields INIT .F.     // Word azurira polja (sadrzaj) pri otvaranju
+   DATA nPageStart INIT 1          // broj prve strane (&P, &N racunaju od njega: "Strana 15 od 18")
+   DATA lTitlePage INIT .F.        // prva strana (naslovna) bez zaglavlja i podnozja
    DATA cInsertAt                  // Read(): novi sadrzaj ide na mesto pasusa sa ovim tekstom
    DATA oHeader
    DATA oFooter
@@ -771,6 +777,7 @@ CLASS WordDocument INHERIT DocxContent
    METHOD Replace( xFind, xReplace )
    METHOD RepeatRow( cMarker, aRows, aKeys )
    METHOD Save( cName )
+   METHOD SavePDF( cPdf, nEngine )
    METHOD ToUTF8( c )
    METHOD SetName( cName ) PROTECTED
    METHOD BaseParts() PROTECTED
@@ -1165,7 +1172,26 @@ FOR EACH a IN { { ::oHeader, "header", "hdr", "headerReference" }, { ::oFooter, 
       _CTOverride( hOut, cPart, CT_WML + a[ 2 ] + "+xml" )
    ENDIF
 NEXT
+// naslovna strana: prazno zaglavlje i podnozje prve strane (Word bi i bez njih
+// ostavio prvu stranu praznom, LibreOffice tada pokaze podnozje)
+IF ::lTitlePage
+   FOR EACH a IN { { "header", "hdr", "headerReference" }, { "footer", "ftr", "footerReference" } }
+      cPart := _FreePart( hOut, cDir + a[ 1 ], ".xml" )
+      hOut[ cPart ] := XML_HEAD + "<w:" + a[ 2 ] + ' xmlns:w="' + NS_W + '"><w:p/></w:' + a[ 2 ] + ">"
+      hOut[ cMain ] := _SetHFRef( hOut[ cMain ], a[ 3 ], _AddRel( hCtx, a[ 1 ], hb_BSubStr( cPart, Len( cDir ) + 1 ) ), "first" )
+      _CTOverride( hOut, cPart, CT_WML + a[ 1 ] + "+xml" )
+   NEXT
+ENDIF
 hCtx[ "compact" ] := .F.
+
+// numeracija strana od nPageStart, naslovna strana bez zaglavlja i podnozja
+IF HB_ISNUMERIC( ::nPageStart ) .AND. ::nPageStart > 1
+   hOut[ cMain ] := _SectSet( hOut[ cMain ], "pgNumType", '<w:pgNumType w:start="' + hb_NToS( Int( ::nPageStart ) ) + '"/>' )
+   hOut[ cMain ] := _LastPageMark( hOut[ cMain ] )
+ENDIF
+IF ::lTitlePage
+   hOut[ cMain ] := _SectSet( hOut[ cMain ], "titlePg", "<w:titlePg/>" )
+ENDIF
 
 // stilovi koje dokument nema
 IF ! Empty( hCtx[ "newStyles" ] )
@@ -1211,6 +1237,37 @@ IF ! _ZipWrite( cFile, hOut )
    RETURN .F.
 ENDIF
 RETURN .T.
+
+// Snima dokument (Save) i pravi PDF od njega. Sama klasa ne crta strane, pa
+// PDF pravi Word (OLE, samo Windows) ili LibreOffice (soffice --headless).
+//    cPdf    - ime PDF-a (podrazumevano kao .docx, sa .pdf)
+//    nEngine - 0 Word, a ako ga nema LibreOffice; 1 samo Word; 2 samo LibreOffice
+// LibreOffice: putanja do soffice u promenljivoj okruzenja DOCX_SOFFICE, inace
+// se trazi u registru (Windows), uobicajenim folderima i u PATH-u.
+METHOD SavePDF( cPdf, nEngine ) CLASS WordDocument
+LOCAL cDocx, cErr := ""
+nEngine := IIF( HB_ISNUMERIC( nEngine ), nEngine, 0 )
+IF ! ::Save()
+   RETURN .F.
+ENDIF
+cDocx := hb_PathJoin( hb_cwd(), ::cFilePath + ::cName )
+IF ! HB_ISSTRING( cPdf ) .OR. Empty( cPdf )
+   cPdf := hb_FNameExtSet( cDocx, ".pdf" )
+ELSE
+   cPdf := hb_PathJoin( hb_cwd(), cPdf )
+ENDIF
+IF hb_FileExists( cPdf ) .AND. FErase( cPdf ) != 0
+   ::cError := "Ne mogu da prepisem fajl " + cPdf + ";Verovatno je otvoren - zatvorite ga i pokusajte ponovo."
+   RETURN .F.
+ENDIF
+IF nEngine != 2 .AND. _PdfWord( cDocx, cPdf, @cErr )
+   RETURN .T.
+ENDIF
+IF nEngine != 1 .AND. _PdfLibreOffice( cDocx, cPdf, @cErr )
+   RETURN .T.
+ENDIF
+::cError := "PDF nije napravljen: " + cErr
+RETURN .F.
 
 // delovi praznog dokumenta
 METHOD BaseParts() CLASS WordDocument
@@ -1538,6 +1595,250 @@ RETURN '<w:r><w:drawing><wp:inline xmlns:wp="' + NS_WP + '" distT="0" distB="0" 
    '<c:chart xmlns:c="' + NS_C + '" xmlns:r="' + NS_R + '" r:id="' + cRId + '"/>' + ;
    "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"
 
+// polje Worda: cInstr ("PAGE", "DATE ..."), cShow = tekst dok Word ne azurira polje
+STATIC FUNCTION _FieldXML( cInstr, cShow, cRPr )
+LOCAL cR := "<w:r>" + IIF( Empty( cRPr ), "", "<w:rPr>" + cRPr + "</w:rPr>" )
+RETURN cR + '<w:fldChar w:fldCharType="begin"/></w:r>' + ;
+       cR + '<w:instrText xml:space="preserve"> ' + XmlEsc( cInstr ) + ' </w:instrText></w:r>' + ;
+       cR + '<w:fldChar w:fldCharType="separate"/></w:r>' + _RunXML( cShow, cRPr ) + ;
+       cR + '<w:fldChar w:fldCharType="end"/></w:r>'
+
+// broj poslednje strane kad numeracija pocinje od nPageStart: { PAGEREF } na
+// skriveni bookmark na kraju dokumenta (_LastPageMark); NUMPAGES broji strane od 1
+STATIC FUNCTION _PagesXML( nAdd, cRPr )
+RETURN _FieldXML( "PAGEREF _DocxLastPage", hb_NToS( nAdd + 1 ), cRPr )
+
+// skriveni bookmark _DocxLastPage u poslednji pasus tela (pre w:sectPr tela)
+STATIC FUNCTION _LastPageMark( cXml )
+LOCAL nS := _LastSectPr( cXml ), nEnd, nEmpty, cMark
+IF nS == 0 .OR. "_DocxLastPage" $ cXml
+   RETURN cXml
+ENDIF
+cMark := '<w:bookmarkStart w:id="99999" w:name="_DocxLastPage"/><w:bookmarkEnd w:id="99999"/>'
+nEnd := hb_BRAt( "</w:p>", hb_BLeft( cXml, nS - 1 ) )
+nEmpty := hb_BRAt( "<w:p/>", hb_BLeft( cXml, nS - 1 ) )
+DO CASE
+CASE nEmpty > nEnd
+   RETURN hb_BLeft( cXml, nEmpty - 1 ) + "<w:p>" + cMark + "</w:p>" + hb_BSubStr( cXml, nEmpty + 6 )
+CASE nEnd > 0
+   RETURN hb_BLeft( cXml, nEnd - 1 ) + cMark + hb_BSubStr( cXml, nEnd )
+ENDCASE
+RETURN hb_BLeft( cXml, nS - 1 ) + "<w:p>" + cMark + "</w:p>" + hb_BSubStr( cXml, nS )
+
+// element poslednjeg w:sectPr (cName bez "w:") postavlja na cElem, na mesto
+// koje mu odredjuje sema (Word odbija drugaciji redosled)
+STATIC FUNCTION _SectSet( cXml, cName, cElem )
+STATIC s_aOrder := { "footnotePr", "endnotePr", "type", "pgSz", "pgMar", "paperSrc", "pgBorders", "lnNumType", ;
+                     "pgNumType", "cols", "formProt", "vAlign", "noEndnote", "titlePg", "textDirection", "bidi", ;
+                     "rtlGutter", "docGrid", "printerSettings", "sectPrChange" }
+LOCAL nS := _LastSectPr( cXml ), nGt, nE, cSect, p, q, i, n
+IF nS == 0
+   RETURN cXml
+ENDIF
+nGt := hb_BAt( ">", cXml, nS )
+IF hb_BSubStr( cXml, nGt - 1, 1 ) == "/"                // <w:sectPr/>
+   RETURN hb_BLeft( cXml, nGt - 2 ) + ">" + cElem + "</w:sectPr>" + hb_BSubStr( cXml, nGt + 1 )
+ENDIF
+nE := hb_BAt( "</w:sectPr>", cXml, nGt )
+IF nE == 0
+   RETURN cXml
+ENDIF
+cSect := hb_BSubStr( cXml, nGt + 1, nE - nGt - 1 )
+// postojeci element (<w:x .../> ili <w:x ...>...</w:x>) se brise
+DO WHILE ( p := _TagPos( cSect, cName, 1 ) ) > 0
+   q := hb_BAt( ">", cSect, p )
+   IF hb_BSubStr( cSect, q - 1, 1 ) != "/"
+      q := hb_BAt( "</w:" + cName + ">", cSect, q )
+      q := IIF( q == 0, hb_BLen( cSect ), q + Len( cName ) + 5 )
+   ENDIF
+   cSect := hb_BLeft( cSect, p - 1 ) + hb_BSubStr( cSect, q + 1 )
+ENDDO
+// ispred prvog elementa koji po semi dolazi posle njega
+p := 0
+n := AScan( s_aOrder, cName )
+FOR i := n + 1 TO Len( s_aOrder )
+   IF ( q := _TagPos( cSect, s_aOrder[ i ], 1 ) ) > 0
+      p := IIF( p == 0, q, Min( p, q ) )
+   ENDIF
+NEXT
+IF p == 0
+   cSect += cElem
+ELSE
+   cSect := hb_BLeft( cSect, p - 1 ) + cElem + hb_BSubStr( cSect, p )
+ENDIF
+RETURN hb_BLeft( cXml, nGt ) + cSect + hb_BSubStr( cXml, nE )
+
+// pocetak elementa <w:cName (ne <w:cNameNesto) od nFrom; 0 ako ga nema
+STATIC FUNCTION _TagPos( c, cName, nFrom )
+LOCAL p := nFrom, ch
+DO WHILE ( p := hb_BAt( "<w:" + cName, c, p ) ) > 0
+   ch := hb_BSubStr( c, p + Len( cName ) + 3, 1 )
+   IF ch $ " />"
+      RETURN p
+   ENDIF
+   p++
+ENDDO
+RETURN 0
+
+// PDF Wordom: OLE kad program linkuje hbwin (win_oleCreateObject), inace
+// preko PowerShella; .F. i razlog u cErr ako Word nije instaliran ili nije uspeo
+STATIC FUNCTION _PdfWord( cDocx, cPdf, cErr )
+#if defined( __PLATFORM__WINDOWS )
+LOCAL oWord, oDoc, lOk := .F., i, oErr
+IF ! hb_IsFunction( "WIN_OLECREATEOBJECT" )
+   RETURN _PdfWordPS( cDocx, cPdf, @cErr )
+ENDIF
+BEGIN SEQUENCE WITH {| e | Break( e ) }
+   oWord := Do( "WIN_OLECREATEOBJECT", "Word.Application" )
+   IF Empty( oWord )
+      cErr += "Word nije instaliran. "
+      BREAK
+   ENDIF
+   oWord:Visible := .F.
+   oWord:DisplayAlerts := 0
+   oDoc := oWord:Documents:Open( cDocx, .F., .T., .F. )     // ConfirmConversions, ReadOnly, AddToRecentFiles
+   FOR i := 1 TO oDoc:TablesOfContents:Count
+      oDoc:TablesOfContents:Item( i ):Update()
+   NEXT
+   oDoc:Fields:Update()
+   oDoc:ExportAsFixedFormat( cPdf, 17 )                   // wdExportFormatPDF
+   lOk := hb_FileExists( cPdf )
+RECOVER USING oErr
+   IF HB_ISOBJECT( oErr )
+      cErr += "Word: " + hb_CStr( oErr:description ) + " " + hb_CStr( oErr:operation ) + ". "
+   ENDIF
+END SEQUENCE
+BEGIN SEQUENCE WITH {| e | Break( e ) }
+   IF ! Empty( oDoc )
+      oDoc:Close( .F. )
+   ENDIF
+   IF ! Empty( oWord )
+      oWord:Quit( .F. )
+   ENDIF
+END SEQUENCE
+RETURN lOk
+#else
+HB_SYMBOL_UNUSED( cDocx )
+HB_SYMBOL_UNUSED( cPdf )
+cErr += "Word: samo na Windowsu. "
+RETURN .F.
+#endif
+
+#if defined( __PLATFORM__WINDOWS )
+// Word preko PowerShella (COM), za programe bez hbwin
+STATIC FUNCTION _PdfWordPS( cDocx, cPdf, cErr )
+LOCAL cPs1 := hb_DirSepAdd( hb_DirTemp() ) + "docx_pdf_word.ps1", cStd := "", cErrOut := ""
+LOCAL cScript := ;
+   "$ErrorActionPreference = 'Stop'; $rc = 0" + hb_eol() + ;
+   "try { $w = New-Object -ComObject Word.Application } catch { [Console]::Error.WriteLine('Word is not installed'); exit 2 }" + hb_eol() + ;
+   "try {" + hb_eol() + ;
+   "  $w.Visible = $false; $w.DisplayAlerts = 0" + hb_eol() + ;
+   "  $d = $w.Documents.Open($args[0], $false, $true, $false)" + hb_eol() + ;
+   "  foreach ($t in $d.TablesOfContents) { $t.Update() }" + hb_eol() + ;
+   "  [void]$d.Fields.Update()" + hb_eol() + ;
+   "  $d.ExportAsFixedFormat($args[1], 17)" + hb_eol() + ;
+   "  $d.Close($false)" + hb_eol() + ;
+   "} catch { [Console]::Error.WriteLine($_.Exception.Message); $rc = 1 }" + hb_eol() + ;
+   "$w.Quit($false); [void][Runtime.InteropServices.Marshal]::ReleaseComObject($w); exit $rc" + hb_eol()
+IF ! hb_MemoWrit( cPs1, cScript )
+   cErr += "Word: ne mogu da napravim " + cPs1 + ". "
+   RETURN .F.
+ENDIF
+hb_processRun( 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + cPs1 + '" "' + cDocx + '" "' + cPdf + '"', , @cStd, @cErrOut )
+FErase( cPs1 )
+IF hb_FileExists( cPdf )
+   RETURN .T.
+ENDIF
+cErr += "Word: " + AllTrim( StrTran( StrTran( cErrOut, Chr( 13 ), "" ), Chr( 10 ), " " ) ) + ". "
+RETURN .F.
+#endif
+
+// PDF LibreOfficeom: soffice --headless --convert-to pdf (svoj profil u
+// privremenom folderu, pa radi i dok je LibreOffice otvoren)
+STATIC FUNCTION _PdfLibreOffice( cDocx, cPdf, cErr )
+LOCAL cExe := _SofficePath(), cOut, cDir, cProfile, cCmd, cStd := "", cErrOut := ""
+IF Empty( cExe )
+   cErr += "LibreOffice nije nadjen (DOCX_SOFFICE). "
+   RETURN .F.
+ENDIF
+cDir := hb_DirSepAdd( hb_DirTemp() ) + "docx_pdf" + hb_ps()
+hb_DirBuild( cDir )
+cOut := cDir + hb_FNameName( cDocx ) + ".pdf"
+FErase( cOut )
+cProfile := "file:///" + StrTran( hb_DirSepAdd( hb_DirTemp() ) + "docx_lo_profile", "\", "/" )
+cCmd := '"' + cExe + '" -env:UserInstallation=' + cProfile + ' --headless --convert-to pdf --outdir "' + ;
+        hb_DirSepDel( cDir ) + '" "' + cDocx + '"'
+hb_processRun( cCmd, , @cStd, @cErrOut )
+IF ! hb_FileExists( cOut )
+   cErr += "LibreOffice: " + AllTrim( cErrOut + " " + cStd ) + ". "
+   RETURN .F.
+ENDIF
+IF ! hb_FileExists( cPdf ) .OR. FErase( cPdf ) == 0
+   IF FRename( cOut, cPdf ) != 0
+      hb_vfCopyFile( cOut, cPdf )
+      FErase( cOut )
+   ENDIF
+ENDIF
+IF ! hb_FileExists( cPdf )
+   cErr += "LibreOffice: ne mogu da napravim " + cPdf + ". "
+   RETURN .F.
+ENDIF
+RETURN .T.
+
+#if defined( __PLATFORM__WINDOWS )
+// podrazumevana vrednost kljuca registra preko reg.exe; "" ako je nema
+STATIC FUNCTION _RegDefault( cKey, cView )
+LOCAL cOut := "", cErr := "", cLine, n
+IF hb_processRun( 'reg query "' + cKey + '" /ve ' + cView, , @cOut, @cErr ) == 0
+   FOR EACH cLine IN hb_ATokens( StrTran( cOut, Chr( 13 ), "" ), Chr( 10 ) )
+      IF ( n := At( "REG_SZ", cLine ) ) > 0
+         RETURN AllTrim( SubStr( cLine, n + 6 ) )
+      ENDIF
+   NEXT
+ENDIF
+RETURN ""
+#endif
+
+// putanja do soffice; "" ako LibreOffice nije nadjen
+STATIC FUNCTION _SofficePath()
+LOCAL c := GetEnv( "DOCX_SOFFICE" ), a, cDir
+IF ! Empty( c ) .AND. hb_FileExists( c )
+   RETURN c
+ENDIF
+#if defined( __PLATFORM__WINDOWS )
+a := {}
+// folder iz registra (reg.exe: 64-bitni i 32-bitni pogled, i za 32-bitni program)
+FOR EACH c IN { "/reg:64", "/reg:32" }
+   cDir := _RegDefault( "HKLM\SOFTWARE\LibreOffice\UNO\InstallPath", c )
+   IF ! Empty( cDir )
+      AAdd( a, hb_DirSepAdd( cDir ) + "soffice.exe" )
+   ENDIF
+NEXT
+AAdd( a, GetEnv( "ProgramFiles" ) + "\LibreOffice\program\soffice.exe" )
+AAdd( a, GetEnv( "ProgramFiles(x86)" ) + "\LibreOffice\program\soffice.exe" )
+AAdd( a, GetEnv( "ProgramW6432" ) + "\LibreOffice\program\soffice.exe" )
+#else
+HB_SYMBOL_UNUSED( cDir )
+a := { "/usr/bin/soffice", "/usr/bin/libreoffice", "/usr/local/bin/soffice", "/usr/lib/libreoffice/program/soffice", ;
+       "/opt/libreoffice/program/soffice", "/snap/bin/libreoffice", "/Applications/LibreOffice.app/Contents/MacOS/soffice" }
+#endif
+FOR EACH c IN a
+   IF hb_FileExists( c )
+      RETURN c
+   ENDIF
+NEXT
+// u PATH-u
+FOR EACH cDir IN hb_ATokens( GetEnv( "PATH" ), hb_osPathListSeparator() )
+   IF ! Empty( cDir )
+      FOR EACH c IN { "soffice", "soffice.exe", "libreoffice" }
+         IF hb_FileExists( hb_DirSepAdd( cDir ) + c )
+            RETURN hb_DirSepAdd( cDir ) + c
+         ENDIF
+      NEXT
+   ENDIF
+NEXT
+RETURN ""
+
 // najmanji .xlsx sa podacima grafikona (Edit Data u Wordu); "" ako ne uspe
 STATIC FUNCTION _ChXlsx( oChart )
 LOCAL h := { => }, cTmp, nH, cData := ""
@@ -1862,13 +2163,14 @@ ENDDO
 RETURN {}
 
 // referenca na zaglavlje/podnozje u sekciji tela (zamenjuje postojecu "default")
-STATIC FUNCTION _SetHFRef( cXml, cTag, cRId )
+STATIC FUNCTION _SetHFRef( cXml, cTag, cRId, cType )
 LOCAL nS := _LastSectPr( cXml ), nGt, nE, cSect, cRef, p, q
 IF nS == 0
    RETURN cXml
 ENDIF
+cType := IIF( HB_ISSTRING( cType ), cType, "default" )
 nGt := hb_BAt( ">", cXml, nS )
-cRef := "<w:" + cTag + ' xmlns:r="' + NS_R + '" w:type="default" r:id="' + cRId + '"/>'
+cRef := "<w:" + cTag + ' xmlns:r="' + NS_R + '" w:type="' + cType + '" r:id="' + cRId + '"/>'
 IF hb_BSubStr( cXml, nGt - 1, 1 ) == "/"
    RETURN hb_BLeft( cXml, nGt - 2 ) + ">" + cRef + "</w:sectPr>" + hb_BSubStr( cXml, nGt + 1 )
 ENDIF
@@ -1880,7 +2182,7 @@ cSect := hb_BSubStr( cXml, nGt + 1, nE - nGt - 1 )
 p := 1
 DO WHILE ( p := hb_BAt( "<w:" + cTag, cSect, p ) ) > 0
    q := hb_BAt( ">", cSect, p )
-   IF 'w:type="default"' $ hb_BSubStr( cSect, p, q - p + 1 )
+   IF ( 'w:type="' + cType + '"' ) $ hb_BSubStr( cSect, p, q - p + 1 )
       cSect := hb_BLeft( cSect, p - 1 ) + hb_BSubStr( cSect, q + 1 )
    ELSE
       p := q

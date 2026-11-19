@@ -14,7 +14,9 @@ Everything is in one source file: `DOCXClass.prg`. It is the companion of the [x
 - Pictures (PNG, JPG, GIF, BMP) in their own paragraph, inside a line of text or in a table cell
 - Charts: column, bar, line, area, pie, doughnut; the data also in an embedded workbook (Word: Edit Data)
 - Hyperlinks, page breaks, page number fields, table of contents
-- Header and footer, with Excel-like codes `&P`, `&N`, `&D`, `&T`, `&F`
+- Header and footer, with Excel-like codes `&P`, `&N`, `&D`, `&T`, `&F`; page numbering from any page,
+  a cover page without header and footer
+- PDF: `SavePDF()` through Word (when installed) or LibreOffice
 - Page setup: paper size, orientation, margins
 - Text is written as UTF-8; text in another codepage (e.g. from a DBF) is converted automatically
 - **Templates**: read a document made in Word, replace placeholders like `{{customer}}` (also when Word split them
@@ -41,6 +43,7 @@ hbmk2 docxwriter.hbp
 hbmk2 docxtemplate.hbp
 hbmk2 docxreader.hbp
 hbmk2 docxchart.hbp
+hbmk2 docxreport.hbp
 ```
 
 The class can be linked together with `XLSXClass.prg` in the same program.
@@ -241,6 +244,13 @@ oDoc:AddFooter( '&F', "", 'Page &P of &N' )
 > In Harbour `&N` inside a string literal is a macro when the function has a variable named `n`
 > (error *E0042 Macro of declared symbol*). Rename the variable or write `"&" + "N"`.
 
+Page numbering from another page and a cover page:
+
+```harbour
+oDoc:nPageStart := 15         // the first page is page 15: "Page 15 of 18" ... "Page 18 of 18"
+oDoc:lTitlePage := .T.        // the first page (cover) has no header and footer
+```
+
 `Header()` and `Footer()` return the content of the header / footer for anything else:
 
 ```harbour
@@ -251,6 +261,52 @@ oDoc:Footer():Paragraph( "Page ", nCenter ):PageNumber():Text( " of " ):PageCoun
 Document defaults: `cFont` (`"Calibri"`), `nFontSize` (11), `nSpaceAfter` (8 pt), `nLineSpacing` (1.08),
 `cLanguage` (`"en-US"`, the spell checking language, e.g. `"sr-Latn-RS"`).
 Document properties: `cTitle`, `cSubject`, `cAuthor`, `cCompany`.
+
+### PDF
+
+The class writes the .docx itself; a PDF needs a program that lays out the pages:
+
+```harbour
+// SavePDF( cPdf, nEngine ): Save(), then the PDF (default name: the .docx name with .pdf)
+// nEngine 0 = Word if installed, else LibreOffice; 1 = Word only; 2 = LibreOffice only
+IF ! oDoc:SavePDF( "report.pdf" )
+   ? oDoc:cError
+ENDIF
+```
+
+- **Word** (Windows): through OLE when the program links `hbwin` (`win_oleCreateObject()`), else through
+  PowerShell - no extra library is needed. Word also updates the table of contents and the fields.
+- **LibreOffice** (Windows, Linux, macOS): `soffice --headless --convert-to pdf` with its own profile in the
+  temp folder, so it works while LibreOffice is open. `soffice` is found in the registry, the usual folders
+  and the `PATH`; or set `DOCX_SOFFICE=D:\LibreOffice\program\soffice.exe`. LibreOffice does not fill the
+  table of contents (it shows the "Update Field" text); the first conversion takes longer (new profile).
+
+### Coming from Word OLE automation
+
+A program that makes documents by driving Word through OLE (`Word.Application`, `Selection`, `Range`) needs
+Word on every computer and is slow. The same document with DOCXClass, without Word -
+`samples/DOCXReport.prg` is a complete example (cover page, header with a logo, "Page X of Y", contents,
+lists, a table with merged rows, signatures, PDF):
+
+| Word OLE | DOCXClass |
+|---|---|
+| `Documents:Add()`, `SaveAs( cDoc )` | `oDoc := WordDocument():New( cDoc )`, `oDoc:Save()` |
+| `PageSetup:Orientation`, `PaperSize`, `LeftMargin` (points) | `lLandscape`, `nPaperSize`, `nLeftMargin` (cm) |
+| `Selection:Font:Name / Size / Bold`, `TypeText()` | `NewFont()`, `oDoc:Paragraph( cText ):Text( cMore, nFont )` |
+| `ParagraphFormat:Alignment`, `SpaceAfter`, `LineSpacingRule` | `NewStyle( nFont, nAlign, nSpaceBefore, nSpaceAfter, nLineSpacing )` |
+| `Style := "Heading 1"` | `oDoc:Heading( cText, 1 )` |
+| `ListFormat:ApplyBulletDefault()` | `oDoc:ListItem( cText, nList, nLevel )` |
+| `Tables:Add()`, `Cell( r, c ):Range:Text` | `oDoc:Table( aWidths )`, `AddRow( aValues )`, `Cell( r, c, xValue, nStyle )` |
+| `Cell():Merge()`, `Shading`, `VerticalAlignment` | `Merge( r1, c1, r2, c2 )`, `Shade( r, c, cColor )`, `VAlign( r, c, n )` |
+| `HeadingFormat := .T.` (repeat header row) | `oTable:nHeaderRows := 1` |
+| `InlineShapes:AddPicture()` (also in a cell) | `oDoc:Picture( cFile, nWidth )`, `oTable:Cell( r, c ):Picture( cFile, nWidth )` |
+| `Headers( 1 ):Range`, `Fields:Add( PAGE / NUMPAGES )` | `oDoc:Header():Table(...)`, `AddFooter( "", "", "Page &P of &N" )` |
+| `{ = { PAGE } + 14 }` (numbering from page 15) | `oDoc:nPageStart := 15` |
+| `DifferentFirstPageHeaderFooter` (cover page) | `oDoc:lTitlePage := .T.` |
+| `TablesOfContents:Add()` | `oDoc:TableOfContents( "Contents" )` |
+| `InsertBreak( 7 )` | `oDoc:PageBreak()` |
+| `Find:Execute( ..., wdReplaceAll )` | `oDoc:Read( cTemplate )`, `oDoc:Replace( { "{{name}}" => cName } )` |
+| `ExportAsFixedFormat( cPdf, 17 )` | `oDoc:SavePDF( cPdf )` |
 
 ### Text in another codepage (DBF data)
 
@@ -339,6 +395,7 @@ ENDIF
 | `samples/DOCXWriter.prg` | title, table of contents, headings, formatted text, lists, tables with totals and merged cells, pictures, a link, header and footer |
 | `samples/DOCXTemplate.prg` | creates `template.docx` with placeholders and fills it: replacements, repeated table rows, new content at a marker |
 | `samples/DOCXReader.prg` | reads a document: paragraphs with styles, tables |
+| `samples/DOCXReport.prg` | a report as made with Word OLE, without Word: cover page, header with a logo, "Page X of Y", contents, lists, a table with merged rows, signatures, `SavePDF()` |
 | `samples/DOCXChart.prg` | charts: column, line with values, horizontal bars in own colors, pie, doughnut, area, charts in a table cell |
 
 ## License
