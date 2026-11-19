@@ -17,6 +17,8 @@ Everything is in one source file: `DOCXClass.prg`. It is the companion of the [x
 - Header and footer, with Excel-like codes `&P`, `&N`, `&D`, `&T`, `&F`; page numbering from any page,
   a cover page without header and footer
 - PDF: `SavePDF()` through Word (when installed) or LibreOffice
+- **Digital signature** of a PDF with a certificate (A1 / A3, `.pfx`): `PDF_Sign()` in `PDFSign.prg`, the
+  signature visible at the row and column given
 - Page setup: paper size, orientation, margins
 - Text is written as UTF-8; text in another codepage (e.g. from a DBF) is converted automatically
 - **Templates**: read a document made in Word, replace placeholders like `{{customer}}` (also when Word split them
@@ -44,6 +46,7 @@ hbmk2 docxtemplate.hbp
 hbmk2 docxreader.hbp
 hbmk2 docxchart.hbp
 hbmk2 docxreport.hbp
+hbmk2 docxsign.hbp
 ```
 
 The class can be linked together with `XLSXClass.prg` in the same program.
@@ -284,6 +287,44 @@ ENDIF
   and the `PATH`; or set `DOCX_SOFFICE=D:\LibreOffice\program\soffice.exe`. LibreOffice does not fill the
   table of contents (it shows the "Update Field" text); the first conversion takes longer (new profile).
 
+### Digital signature of the PDF
+
+`PDFSign.prg` signs any PDF - made by `SavePDF()`, by hbhpdf / libharu, by Word or LibreOffice - with a
+certificate: a PAdES signature (`/SubFilter /adbe.pkcs7.detached`, CMS with SHA-256, the signing time and
+the chain of certificates), visible on the page. The PDF is not rewritten: the signature is added at its
+end (an incremental update), so a signed PDF can be signed again and the earlier signatures stay valid.
+
+```harbour
+// hbmk2 myapp.prg DOCXClass.prg PDFSign.prg pdfsignw.c hbmzip.hbc -lcrypt32
+LOCAL cErr := ""
+IF ! PDF_Sign( "report.pdf", "report_signed.pdf", { ;
+        "row" => -6, "col" => 45, ;               // as @ nRow, nCol on a printer: 6 rows and 10 columns per inch
+        "width" => 85, "height" => 18, ;          // mm
+        "page" => 0, ;                            // the last page (1 = the first)
+        "reason" => "Approval", "location" => "Marília - SP", ;
+        "text" => { "Assinado digitalmente por {name}", "Data: {date}", "Motivo: {reason}" } }, @cErr )
+   ? cErr
+ENDIF
+```
+
+| Option | Meaning |
+|---|---|
+| `cert` | the thumbprint of a certificate in the Windows store (A1 installed, A3 token or card: Windows asks for the PIN); empty and no `pfx`: the window of Windows to choose one (`PDF_SelectCertificate()`) |
+| `pfx`, `password` | a `.pfx` / `.p12` file instead (not installed); on Linux the only way (through `openssl`) |
+| `row`, `col` | the top left corner of the signature in rows and columns from the top left of the page, 6 rows and 10 columns per inch; a negative `row`: the bottom of the signature that many rows above the bottom of the page |
+| `top`, `left` | the same in mm |
+| `width`, `height` | the size in mm (80 x 18) |
+| `page` | 1 the first page, 0 the last (default), -1 the one before the last |
+| `reason`, `location`, `contact` | shown in the signature panel of the reader |
+| `text` | the lines of the signature: `{name}` (CN of the certificate), `{date}`, `{reason}`, `{location}`, `{issuer}` |
+| `visible` | `.F.`: a signature without a picture on the page |
+| `border`, `background` | the frame (`.T.`), a white field under the text (`.F.`) |
+| `fontsize`, `size` | the font size (0: what fits), the room for the signature in bytes (20000) |
+
+`PDF_Certificates()` lists the personal certificates of Windows: `{ cThumbprint, cName, cIssuer, cValidTo, lHasKey }`.
+Not done: encrypted PDFs; the text of the signature is Helvetica (the letters of Western Europe), the
+`/Rotate` of a page is not taken into account; no time stamp server (the time is that of the computer).
+
 ### Coming from Word OLE automation
 
 A program that makes documents by driving Word through OLE (`Word.Application`, `Selection`, `Range`) needs
@@ -398,7 +439,8 @@ ENDIF
 | `samples/DOCXWriter.prg` | title, table of contents, headings, formatted text, lists, tables with totals and merged cells, pictures, a link, header and footer |
 | `samples/DOCXTemplate.prg` | creates `template.docx` with placeholders and fills it: replacements, repeated table rows, new content at a marker |
 | `samples/DOCXReader.prg` | reads a document: paragraphs with styles, tables |
-| `samples/DOCXReport.prg` | a report as made with Word OLE, without Word: cover page, header with a logo, "Page X of Y", contents, lists, a table with merged rows, signatures, `SavePDF()` |
+| `samples/DOCXReport.prg` | a report as made with Word OLE, without Word: cover page, header with a logo, "Page X of Y", contents, lists, a table with merged rows, signatures, `SavePDF()`; `docxreport sign`: the PDF signed with a certificate |
+| `samples/DOCXSign.prg` | a contract made, saved as PDF and signed with a certificate; or any PDF signed at the row and column given (`docxsign file.pdf -6 45`) |
 | `samples/DOCXChart.prg` | charts: column, line with values, horizontal bars in own colors, pie, doughnut, area, charts in a table cell |
 
 ## License

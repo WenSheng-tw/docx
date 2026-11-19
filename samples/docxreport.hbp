@@ -1,3 +1,6 @@
 DOCXReport.prg
 ../DOCXClass.prg
+../PDFSign.prg
+{win}../pdfsignw.c
 hbmzip.hbc
+{win}-lcrypt32

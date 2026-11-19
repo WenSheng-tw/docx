@@ -4,15 +4,17 @@
 // justified text, lists, a table with a repeated header row, merged and shaded cells,
 // a signature table; then the same document as PDF (Word or LibreOffice).
 // Build: hbmk2 docxreport.hbp   -> report.docx, report.pdf
+//   docxreport sign               -> also report_signed.pdf: signed with a certificate
+//                                    (Windows: chosen in the window of Windows; see DOCXSign.prg)
 #include "hbclass.ch"
 REQUEST HB_GT_WIN_DEFAULT
 REQUEST HB_CODEPAGE_UTF8EX
 
-PROCEDURE Main()
+PROCEDURE Main( cSign )
 LOCAL oDoc, oHead, oTable, oCell, aRow, nRow, nGroup, cGroup := ""
 LOCAL nTitle, nBig, nBold, nWhite, nSmall
 LOCAL nCenter, nRight, nJustify, nHeadCell, nBoldCell, nSign
-LOCAL cLogo := hb_DirBase() + "logo.png"
+LOCAL cLogo := hb_DirBase() + "logo.png", cErr := ""
 LOCAL aExams := { ;
    { "Administration", "Ana Souza",      "Clinical exam",     SToD( "20261103" ), "Fit" }, ;
    { "Administration", "Bruno Lima",     "Clinical exam",     SToD( "20261103" ), "Fit" }, ;
@@ -143,6 +145,17 @@ ENDIF
 // PDF: Word if it is installed, else LibreOffice (Malc_Word:Finalizar with lGerarPDF)
 IF oDoc:SavePDF( "report.pdf" )
    ? "Created report.pdf"
+   // a certificate chosen: the PDF signed, the signature on the last page, 6 rows above the bottom
+   IF Lower( hb_defaultValue( cSign, "" ) ) == "sign"
+      IF PDF_Sign( "report.pdf", "report_signed.pdf", ;
+                   { "page" => 0, "row" => -6, "col" => 45, "width" => 85, "height" => 18, ;
+                     "reason" => "Occupational health report", "location" => "Marília - SP", ;
+                     "text" => { "Assinado digitalmente por {name}", "Data: {date}", "Motivo: {reason}" } }, @cErr )
+         ? "Created report_signed.pdf"
+      ELSE
+         ? "Not signed:", cErr
+      ENDIF
+   ENDIF
 ELSE
    ? oDoc:cError
 ENDIF
