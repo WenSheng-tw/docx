@@ -448,10 +448,20 @@ ENDIF
 | `samples/DOCXSign.prg` | a contract made, saved as PDF and signed with a certificate; or any PDF signed at the row and column given (`docxsign file.pdf -6 45`) |
 | `samples/DOCXChart.prg` | charts: column, line with values, horizontal bars in own colors, pie, doughnut, area, charts in a table cell |
 
-## License
+## License, Donations & Commercial Use
 
-Dual licensed: **GNU GPL version 3 or later** (`COPYING`) **or a commercial license** from the
-author, Srđan Dragojlović (S.O.K. doo Kraljevo, https://sokdoo.com, digikv@yahoo.com,
-sok@sokdoo.com). Under the GPL a program that
-includes the class must be distributed under the GPL with its source; for closed source programs
-ask for a commercial license. See `LICENSE`.
+Dual licensed: **GNU GPL version 3 or later** (`COPYING`) **or a commercial license** from the author, Srđan Dragojlović (`digikv@yahoo.com`).
+
+* **Open-Source & Internal Use (GPLv3):** Free to use in open-source projects, for personal use, or strictly internally within a single company without distribution to third parties.
+* **Commercial License (Closed-Source):** For closed-source programs distributed or sold to third parties, a one-time, perpetual company-wide commercial license is available for **150 EUR** (or **190 EUR** as a bundle together with the companion [`XLSXClass.prg`](https://github.com) library), covering unlimited internal developers and deployments.
+
+### Support & Donations
+If you use this library for personal, open-source, or internal projects and find it helpful, voluntary donations to support ongoing development are warmly appreciated:
+* **PayPal:** `digikv@yahoo.com`
+
+### How to Purchase a Commercial License
+1. Send the payment (**150 EUR** for `DOCXClass.prg` or **190 EUR** for the `DOCXClass.prg` + `XLSXClass.prg` bundle) via **PayPal** to: `digikv@yahoo.com`
+2. Include your **company name** and **email address** in the PayPal payment note (or send a confirmation email to `digikv@yahoo.com`).
+3. You will receive your commercial license certificate by email.
+
+See `LICENSE` for more details.
